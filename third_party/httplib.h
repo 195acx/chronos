@@ -1,12 +1,29 @@
 #pragma once
+// Lightweight cross-platform HTTP server (Linux/POSIX + Windows)
+// Implements the same httplib::Server API surface used by Chronos.
+// On Linux: uses POSIX sockets. On Windows: uses Winsock2.
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+   typedef SOCKET sock_t;
+#  define INVALID_SOCK INVALID_SOCKET
+#  define close_sock(s) closesocket(s)
+#  define sock_errno WSAGetLastError()
+#else
+#  include <sys/socket.h>
+#  include <netinet/in.h>
+#  include <arpa/inet.h>
+#  include <unistd.h>
+#  include <cerrno>
+   typedef int sock_t;
+#  define INVALID_SOCK (-1)
+#  define close_sock(s) ::close(s)
+#  define sock_errno errno
 #endif
-
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
 
 #include <atomic>
 #include <filesystem>
@@ -29,8 +46,13 @@ struct Request {
 
     std::string get_header_value(const std::string& key) const {
         for (const auto& [k, v] : headers) {
-            if (_stricmp(k.c_str(), key.c_str()) == 0) {
-                return v;
+            // case-insensitive compare
+            if (k.size() == key.size()) {
+                bool eq = true;
+                for (size_t i = 0; i < k.size(); ++i)
+                    if (std::tolower((unsigned char)k[i]) != std::tolower((unsigned char)key[i]))
+                        { eq = false; break; }
+                if (eq) return v;
             }
         }
         return "";
@@ -57,13 +79,17 @@ public:
     using Handler = std::function<void(const Request&, Response&)>;
 
     Server() {
-        WSADATA wsaData;
-        WSAStartup(MAKEWORD(2, 2), &wsaData);
+#ifdef _WIN32
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
     }
 
     ~Server() {
         stop();
+#ifdef _WIN32
         WSACleanup();
+#endif
     }
 
     Server& Get(const std::string& pattern, Handler handler) {
@@ -78,34 +104,32 @@ public:
 
     Server& set_mount_point(const std::string& mount_point, const std::string& dir) {
         mount_point_ = mount_point;
-        mount_dir_ = dir;
+        mount_dir_   = dir;
         return *this;
     }
 
     bool listen(const std::string& host, int port) {
-        listen_socket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (listen_socket_ == INVALID_SOCKET) {
-            return false;
-        }
+        listen_sock_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_sock_ == INVALID_SOCK) return false;
 
         int opt = 1;
-        setsockopt(listen_socket_, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt));
+#ifdef _WIN32
+        setsockopt(listen_sock_, SOL_SOCKET, SO_REUSEADDR,
+                   reinterpret_cast<const char*>(&opt), sizeof(opt));
+#else
+        setsockopt(listen_sock_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#endif
 
-        sockaddr_in server_addr{};
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_port = htons(static_cast<u_short>(port));
-        inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr);
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port   = htons(static_cast<uint16_t>(port));
+        inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
 
-        if (bind(listen_socket_, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) == SOCKET_ERROR) {
-            closesocket(listen_socket_);
-            listen_socket_ = INVALID_SOCKET;
-            return false;
+        if (::bind(listen_sock_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+            close_sock(listen_sock_); listen_sock_ = INVALID_SOCK; return false;
         }
-
-        if (::listen(listen_socket_, SOMAXCONN) == SOCKET_ERROR) {
-            closesocket(listen_socket_);
-            listen_socket_ = INVALID_SOCKET;
-            return false;
+        if (::listen(listen_sock_, SOMAXCONN) != 0) {
+            close_sock(listen_sock_); listen_sock_ = INVALID_SOCK; return false;
         }
 
         is_running_ = true;
@@ -113,189 +137,184 @@ public:
 
         while (is_running_) {
             sockaddr_in client_addr{};
-            int client_len = sizeof(client_addr);
-            SOCKET client_socket = accept(listen_socket_, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
-
-            if (client_socket == INVALID_SOCKET) {
+            socklen_t client_len = sizeof(client_addr);
+            sock_t client = ::accept(listen_sock_,
+                                     reinterpret_cast<sockaddr*>(&client_addr),
+                                     &client_len);
+            if (client == INVALID_SOCK) {
                 if (!is_running_) break;
                 continue;
             }
-
-            std::thread([this, client_socket]() {
-                handle_client(client_socket);
-            }).detach();
+            std::thread([this, client]() { handle_client(client); }).detach();
         }
-
         return true;
     }
 
     void stop() {
         if (is_running_) {
             is_running_ = false;
-            if (listen_socket_ != INVALID_SOCKET) {
-                closesocket(listen_socket_);
-                listen_socket_ = INVALID_SOCKET;
+            if (listen_sock_ != INVALID_SOCK) {
+                close_sock(listen_sock_);
+                listen_sock_ = INVALID_SOCK;
             }
         }
     }
 
 private:
-    SOCKET listen_socket_ = INVALID_SOCKET;
+    sock_t listen_sock_ = INVALID_SOCK;
     std::atomic<bool> is_running_{false};
     std::map<std::string, Handler> get_handlers_;
     std::map<std::string, Handler> post_handlers_;
     std::string mount_point_;
     std::string mount_dir_;
 
-    static std::string get_mime_type(const std::string& path) {
-        if (path.rfind(".html") != std::string::npos || path.rfind(".htm") != std::string::npos) return "text/html; charset=utf-8";
-        if (path.rfind(".css") != std::string::npos) return "text/css; charset=utf-8";
-        if (path.rfind(".js") != std::string::npos) return "application/javascript; charset=utf-8";
-        if (path.rfind(".json") != std::string::npos) return "application/json; charset=utf-8";
-        if (path.rfind(".svg") != std::string::npos) return "image/svg+xml";
-        if (path.rfind(".png") != std::string::npos) return "image/png";
-        if (path.rfind(".ico") != std::string::npos) return "image/x-icon";
+    static std::string mime_type(const std::string& path) {
+        auto ends = [&](const char* s) {
+            return path.size() >= strlen(s) &&
+                   path.compare(path.size() - strlen(s), strlen(s), s) == 0;
+        };
+        if (ends(".html") || ends(".htm")) return "text/html; charset=utf-8";
+        if (ends(".css"))  return "text/css; charset=utf-8";
+        if (ends(".js"))   return "application/javascript; charset=utf-8";
+        if (ends(".json")) return "application/json; charset=utf-8";
+        if (ends(".svg"))  return "image/svg+xml";
+        if (ends(".png"))  return "image/png";
+        if (ends(".ico"))  return "image/x-icon";
         return "text/plain; charset=utf-8";
     }
 
-    void handle_client(SOCKET client_socket) {
-        std::string raw_request;
-        char buffer[4096];
-        int bytes_read = 0;
+    // Raw socket read/write helpers
+    static bool sock_send(sock_t s, const std::string& data) {
+        size_t sent = 0;
+        while (sent < data.size()) {
+#ifdef _WIN32
+            int n = ::send(s, data.data() + sent, (int)(data.size() - sent), 0);
+#else
+            ssize_t n = ::send(s, data.data() + sent, data.size() - sent, MSG_NOSIGNAL);
+#endif
+            if (n <= 0) return false;
+            sent += n;
+        }
+        return true;
+    }
 
-        // Read headers
-        while ((bytes_read = recv(client_socket, buffer, sizeof(buffer) - 1, 0)) > 0) {
-            buffer[bytes_read] = '\0';
-            raw_request.append(buffer, bytes_read);
-            if (raw_request.find("\r\n\r\n") != std::string::npos) {
-                break;
-            }
+    void handle_client(sock_t client) {
+        // Read until we see the end of the HTTP headers
+        std::string raw;
+        char buf[4096];
+        while (raw.find("\r\n\r\n") == std::string::npos) {
+#ifdef _WIN32
+            int n = ::recv(client, buf, sizeof(buf) - 1, 0);
+#else
+            ssize_t n = ::recv(client, buf, sizeof(buf) - 1, 0);
+#endif
+            if (n <= 0) { close_sock(client); return; }
+            raw.append(buf, n);
         }
 
-        if (raw_request.empty()) {
-            closesocket(client_socket);
-            return;
-        }
+        size_t header_end = raw.find("\r\n\r\n");
+        std::string header_part = raw.substr(0, header_end);
+        std::string body_part   = (header_end + 4 < raw.size())
+                                  ? raw.substr(header_end + 4) : "";
 
-        // Parse Request Line and Headers
-        size_t header_end = raw_request.find("\r\n\r\n");
-        std::string header_part = raw_request.substr(0, header_end);
-        std::string body_part = (header_end != std::string::npos && header_end + 4 < raw_request.size())
-                                    ? raw_request.substr(header_end + 4)
-                                    : "";
+        // Parse request line
+        std::istringstream hs(header_part);
+        std::string req_line;
+        std::getline(hs, req_line);
+        if (!req_line.empty() && req_line.back() == '\r') req_line.pop_back();
 
-        std::istringstream stream(header_part);
-        std::string request_line;
-        std::getline(stream, request_line);
-        if (!request_line.empty() && request_line.back() == '\r') {
-            request_line.pop_back();
-        }
-
-        std::istringstream req_stream(request_line);
         Request req;
-        std::string http_version;
-        req_stream >> req.method >> req.path >> http_version;
+        {
+            std::istringstream rs(req_line);
+            std::string ver;
+            rs >> req.method >> req.path >> ver;
+        }
 
-        // Strip query string for path routing
+        // Strip query string
         size_t qpos = req.path.find('?');
         std::string clean_path = (qpos != std::string::npos) ? req.path.substr(0, qpos) : req.path;
 
-        // Parse Headers
-        std::string line;
-        while (std::getline(stream, line)) {
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            size_t colon = line.find(':');
+        // Parse headers
+        std::string hline;
+        while (std::getline(hs, hline)) {
+            if (!hline.empty() && hline.back() == '\r') hline.pop_back();
+            size_t colon = hline.find(':');
             if (colon != std::string::npos) {
-                std::string k = line.substr(0, colon);
-                std::string v = line.substr(colon + 1);
-                // trim
-                size_t start = v.find_first_not_of(" \t");
-                if (start != std::string::npos) v = v.substr(start);
+                std::string k = hline.substr(0, colon);
+                std::string v = hline.substr(colon + 1);
+                size_t s = v.find_first_not_of(" \t");
+                if (s != std::string::npos) v = v.substr(s);
                 req.headers[k] = v;
             }
         }
 
-        // Read remaining body if Content-Length specified
-        std::string len_str = req.get_header_value("Content-Length");
-        if (!len_str.empty()) {
-            size_t content_length = std::stoul(len_str);
-            while (body_part.size() < content_length) {
-                bytes_read = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
-                if (bytes_read <= 0) break;
-                buffer[bytes_read] = '\0';
-                body_part.append(buffer, bytes_read);
+        // Read body by Content-Length
+        std::string clen_str = req.get_header_value("Content-Length");
+        if (!clen_str.empty()) {
+            size_t clen = std::stoul(clen_str);
+            while (body_part.size() < clen) {
+#ifdef _WIN32
+                int n = ::recv(client, buf, sizeof(buf) - 1, 0);
+#else
+                ssize_t n = ::recv(client, buf, sizeof(buf) - 1, 0);
+#endif
+                if (n <= 0) break;
+                body_part.append(buf, n);
             }
         }
         req.body = body_part;
 
+        // Build response with CORS headers
         Response res;
-        res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_header("Access-Control-Allow-Origin",  "*");
         res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         res.set_header("Access-Control-Allow-Headers", "Content-Type");
 
-        // Handle OPTIONS preflight
         if (req.method == "OPTIONS") {
             res.status = 204;
-            send_response(client_socket, res);
-            closesocket(client_socket);
-            return;
-        }
-
-        // Route Request
-        bool handled = false;
-        if (req.method == "GET" && get_handlers_.find(clean_path) != get_handlers_.end()) {
-            get_handlers_[clean_path](req, res);
-            handled = true;
-        } else if (req.method == "POST" && post_handlers_.find(clean_path) != post_handlers_.end()) {
-            post_handlers_[clean_path](req, res);
-            handled = true;
-        } else if (req.method == "GET" && !mount_dir_.empty()) {
-            // Serve static files
-            std::string relative_path = clean_path;
-            if (relative_path == "/" || relative_path.empty()) {
-                relative_path = "/index.html";
-            }
-
-            std::filesystem::path file_path = std::filesystem::path(mount_dir_) / relative_path.substr(1);
-            if (std::filesystem::exists(file_path) && !std::filesystem::is_directory(file_path)) {
-                std::ifstream f(file_path, std::ios::binary);
-                if (f.is_open()) {
-                    std::ostringstream ss;
-                    ss << f.rdbuf();
-                    res.status = 200;
-                    res.set_content(ss.str(), get_mime_type(file_path.string()));
-                    handled = true;
+        } else {
+            bool handled = false;
+            if (req.method == "GET" && get_handlers_.count(clean_path)) {
+                get_handlers_[clean_path](req, res); handled = true;
+            } else if (req.method == "POST" && post_handlers_.count(clean_path)) {
+                post_handlers_[clean_path](req, res); handled = true;
+            } else if (req.method == "GET" && !mount_dir_.empty()) {
+                std::string rel = clean_path;
+                if (rel == "/" || rel.empty()) rel = "/index.html";
+                std::filesystem::path fp =
+                    std::filesystem::path(mount_dir_) / rel.substr(1);
+                if (std::filesystem::exists(fp) && !std::filesystem::is_directory(fp)) {
+                    std::ifstream f(fp, std::ios::binary);
+                    if (f) {
+                        std::ostringstream ss; ss << f.rdbuf();
+                        res.status = 200;
+                        res.set_content(ss.str(), mime_type(fp.string()));
+                        handled = true;
+                    }
                 }
             }
+            if (!handled) {
+                res.status = 404;
+                res.set_content("{\"error\":\"Not Found\"}", "application/json");
+            }
         }
 
-        if (!handled) {
-            res.status = 404;
-            res.set_content("{\"error\":\"Not Found\"}", "application/json");
-        }
+        // Serialise and send HTTP response
+        std::string status_text =
+            res.status == 200 ? "OK" :
+            res.status == 204 ? "No Content" :
+            res.status == 400 ? "Bad Request" :
+            res.status == 404 ? "Not Found" : "Internal Server Error";
 
-        send_response(client_socket, res);
-        closesocket(client_socket);
-    }
-
-    void send_response(SOCKET client_socket, const Response& res) {
         std::ostringstream out;
-        std::string status_text = (res.status == 200) ? "OK" :
-                                  (res.status == 204) ? "No Content" :
-                                  (res.status == 400) ? "Bad Request" :
-                                  (res.status == 404) ? "Not Found" : "Internal Server Error";
-
         out << "HTTP/1.1 " << res.status << " " << status_text << "\r\n";
-        for (const auto& [k, v] : res.headers) {
-            out << k << ": " << v << "\r\n";
-        }
+        for (const auto& [k, v] : res.headers) out << k << ": " << v << "\r\n";
         out << "Content-Length: " << res.body.size() << "\r\n";
-        out << "Connection: close\r\n";
-        out << "\r\n";
+        out << "Connection: close\r\n\r\n";
         out << res.body;
 
-        std::string response_str = out.str();
-        send(client_socket, response_str.data(), static_cast<int>(response_str.size()), 0);
+        sock_send(client, out.str());
+        close_sock(client);
     }
 };
 
