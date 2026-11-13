@@ -13,6 +13,7 @@ public:
 
 private:
     std::string send(const std::string& cmd);   // send one GDB command, return its output
+    std::string describePointer(const std::string& name, const std::string& value);
     pid_t pid_ = -1;
     int toGdb_ = -1, fromGdb_ = -1;
     bool crashed_ = false;

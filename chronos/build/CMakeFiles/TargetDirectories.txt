@@ -1,0 +1,3 @@
+/workspaces/chronos/chronos/build/CMakeFiles/chronos.dir
+/workspaces/chronos/chronos/build/CMakeFiles/edit_cache.dir
+/workspaces/chronos/chronos/build/CMakeFiles/rebuild_cache.dir

@@ -55,6 +55,34 @@ std::string GdbBackend::send(const std::string& cmd) {
     }
     return buf;
 }
+// If a variable is a pointer, follow it and show what it points to.
+// Follows "next" links so a linked list shows all its nodes.
+std::string GdbBackend::describePointer(const std::string& name, const std::string& value) {
+    static const std::regex ptrRe(R"(^(?:\([^)]*\)\s*)?(0x[0-9a-f]+)$)");
+    static const std::regex nextRe(R"(\bnext = (?:\([^)]*\)\s*)?(0x[0-9a-f]+))");
+    std::smatch pm;
+    if (!std::regex_match(value, pm, ptrRe)) return value;      // not a plain pointer
+    if (pm[1].str() == "0x0") return "nullptr";
+
+    std::string result = value;
+    std::string path = name;
+    for (int hop = 0; hop < 8; ++hop) {                          // follow at most 8 nodes
+        std::string r = send("print *" + path);
+        size_t m = r.find("@@END@@");
+        if (m != std::string::npos) r.erase(m);                  // remove the end marker
+        r = trim(r);
+        size_t eq = r.find(" = ");
+        if (r.rfind("$", 0) != 0 || eq == std::string::npos) break;   // error: cannot dereference
+        std::string text = trim(r.substr(eq + 3));
+        result += " → " + text;
+
+        std::smatch nm;
+        if (!std::regex_search(text, nm, nextRe)) break;         // no "next" field: stop here
+        if (nm[1].str() == "0x0") { result += " → nullptr"; break; }
+        path += "->next";
+    }
+    return result;
+}
 
 bool GdbBackend::start(const std::string& exe) {
     signal(SIGPIPE, SIG_IGN);
@@ -106,6 +134,7 @@ bool GdbBackend::capture(Snapshot& snap) {
             if (std::regex_match(l, lm, localRe))
                 f.vars.push_back({lm[1].str(), lm[2].str()});
         }
+        for (auto& v : f.vars) v.value = describePointer(v.name, v.value);
         frames.push_back(f);
     }
     send("frame 0");
