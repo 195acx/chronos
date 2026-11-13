@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chronos — Time-Travel Debugger IDE</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Top App Navigation & Header -->
+  <header class="app-header">
+    <div class="header-brand">
+      <svg class="brand-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <polyline points="12 6 12 12 16 14"/>
+        <path d="M4 4l3 3M20 4l-3 3"/>
+      </svg>
+      <span class="brand-title">Chronos</span>
+      <span class="brand-tag">C++ Time-Travel Debugger</span>
+    </div>
+
+    <!-- Main Navigation Tabs -->
+    <nav class="nav-tabs" aria-label="Main application tabs">
+      <button class="nav-tab active" data-tab="tab-editor" id="tab-btn-editor">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="16 18 22 12 16 6"/>
+          <polyline points="8 6 2 12 8 18"/>
+        </svg>
+        <span>Code Editor</span>
+      </button>
+
+      <button class="nav-tab" data-tab="tab-debugger" id="tab-btn-debugger">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+        <span>Debugger</span>
+        <span class="tab-badge" id="step-count-badge">19 steps</span>
+      </button>
+
+      <button class="nav-tab" data-tab="tab-analysis" id="tab-btn-analysis">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span>Bug Analysis</span>
+        <span class="tab-badge badge-alert hidden" id="analysis-alert-badge">!</span>
+      </button>
+    </nav>
+
+    <!-- Header Actions -->
+    <div class="header-actions">
+      <div class="server-status" id="server-status" title="Backend connection status">
+        <span class="status-dot online"></span>
+        <span class="status-label" id="status-label">Online</span>
+      </div>
+      <button id="theme-toggle" class="btn btn-ghost btn-sm" title="Toggle theme">
+        <span id="theme-label">Theme</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main View Container -->
+  <main class="app-main">
+
+    <!-- ====================================================================
+         TAB 1: CODE EDITOR (Starting Screen)
+         ==================================================================== -->
+    <section id="tab-editor" class="tab-pane active" aria-labelledby="tab-btn-editor">
+      <div class="editor-toolbar">
+        <div class="toolbar-left">
+          <div class="file-pill">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+            </svg>
+            <span id="editor-filename">fact.cpp</span>
+          </div>
+
+          <div class="preset-group">
+            <label for="example-select" class="preset-label">Examples:</label>
+            <select id="example-select" class="form-select">
+              <option value="fact">Buggy Factorial (fact.cpp)</option>
+              <option value="assign">Variable Assignments (assign.cpp)</option>
+              <option value="loop">Loop Counter (loop.cpp)</option>
+              <option value="funcs">Nested Function Calls (funcs.cpp)</option>
+              <option value="list">Linked List (list.cpp)</option>
+              <option value="crash">Null Dereference Crash (crash.cpp)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="toolbar-right">
+          <button id="btn-clear-code" class="btn btn-secondary btn-sm" title="Clear editor content">Clear</button>
+          <button id="btn-reset-code" class="btn btn-secondary btn-sm" title="Reset to selected example">Reset</button>
+          <button id="btn-run-code" class="btn btn-primary btn-run" title="Compile and debug program (Ctrl+Enter)">
+            <svg class="run-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+              <path d="M8 5v14l11-7z"/>
+            </svg>
+            <span id="run-btn-label">Run &amp; Debug</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Code Editor Workspace -->
+      <div class="editor-workspace">
+        <div class="code-editor-container">
+          <div class="editor-gutter" id="editor-gutter"></div>
+          <textarea id="code-editor-input" class="code-editor-input" spellcheck="false" wrap="off" placeholder="Write or edit your C++ code here..."></textarea>
+        </div>
+
+        <!-- Compilation Output Console -->
+        <div class="compiler-console" id="compiler-console">
+          <div class="console-header">
+            <div class="console-title-group">
+              <span class="status-indicator-dot success" id="console-status-dot"></span>
+              <span class="console-title" id="console-status-title">Build &amp; Compiler Output</span>
+            </div>
+            <div class="console-actions">
+              <button id="btn-clear-console" class="btn btn-ghost btn-xs">Clear Log</button>
+            </div>
+          </div>
+          <pre class="console-body" id="console-output-text">Ready. Select an example or write C++ code, then click 'Run &amp; Debug'.</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====================================================================
+         TAB 2: DEBUGGER
+         ==================================================================== -->
+    <section id="tab-debugger" class="tab-pane" aria-labelledby="tab-btn-debugger">
+      <!-- Timeline Controls Header -->
+      <div class="timeline-bar">
+        <div class="transport-controls">
+          <button id="btn-first" class="btn btn-icon" title="Go to start (Home)" aria-label="Go to start">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+              <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
+            </svg>
+          </button>
+          <button id="btn-prev" class="btn btn-icon" title="Step back (Left Arrow)" aria-label="Step back">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+              <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
+            </svg>
+          </button>
+          <button id="btn-play" class="btn btn-play" title="Play / Pause (Space)" aria-label="Play or pause">
+            <svg id="icon-play" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+              <path d="M8 5v14l11-7z"/>
+            </svg>
+            <svg id="icon-pause" class="hidden" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+              <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+            </svg>
+            <span id="play-text">Play</span>
+          </button>
+          <button id="btn-next" class="btn btn-icon" title="Step forward (Right Arrow)" aria-label="Step forward">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+              <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
+            </svg>
+          </button>
+          <button id="btn-last" class="btn btn-icon" title="Go to end (End)" aria-label="Go to end">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+              <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="timeline-scrubber">
+          <input type="range" id="timeline-slider" min="1" max="1" value="1" step="1" aria-label="Timeline scrubber">
+        </div>
+
+        <div class="step-indicator" title="Current step of total">
+          <span>step <strong id="cur-step-counter">1</strong> of <span id="total-step-counter">1</span></span>
+        </div>
+
+        <div class="jump-control">
+          <input type="number" id="jump-input" min="1" max="1" placeholder="Step #" title="Type step number and press Enter">
+          <button id="btn-jump" class="btn btn-secondary btn-sm">Jump</button>
+        </div>
+      </div>
+
+      <!-- Debugger Split Workspace -->
+      <div class="debugger-layout">
+        <!-- Left: Source Code View -->
+        <section class="panel-card source-view-card" aria-label="Source code viewer">
+          <div class="panel-header">
+            <div class="panel-title-group">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="16 18 22 12 16 6"/>
+                <polyline points="8 6 2 12 8 18"/>
+              </svg>
+              <span class="panel-title" id="source-filename-title">fact.cpp</span>
+            </div>
+            <span class="chip chip-accent" id="current-location-chip">fact() at line 4</span>
+          </div>
+          <div class="source-view-body" id="debugger-source-body">
+            <div class="source-lines" id="debugger-source-lines"></div>
+          </div>
+        </section>
+
+        <!-- Right: Inspector Column -->
+        <section class="debugger-inspector-column" aria-label="Execution inspector">
+          <!-- Variable Inspector -->
+          <div class="panel-card variables-panel">
+            <div class="panel-header">
+              <div class="panel-title-group">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M4 7V4h16v3M9 20h6M12 4v16"/>
+                </svg>
+                <span class="panel-title">Variable Inspector</span>
+                <span class="chip chip-subtle" id="var-func-chip">current frame</span>
+              </div>
+              <span class="helper-text">Variables in current execution frame</span>
+            </div>
+            <div class="panel-body">
+              <table class="data-table" id="variables-table">
+                <thead>
+                  <tr>
+                    <th>Variable</th>
+                    <th>Current Value</th>
+                    <th>Previous Value / Status</th>
+                  </tr>
+                </thead>
+                <tbody id="variables-tbody"></tbody>
+              </table>
+              <div id="variables-empty" class="empty-state hidden">No local variables in current frame.</div>
+            </div>
+          </div>
+
+          <!-- Call Stack -->
+          <div class="panel-card stack-panel">
+            <div class="panel-header">
+              <div class="panel-title-group">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                  <polyline points="2 17 12 22 22 17"/>
+                  <polyline points="2 12 12 17 22 12"/>
+                </svg>
+                <span class="panel-title">Call Stack</span>
+                <span class="chip chip-subtle" id="stack-depth-chip">depth 1</span>
+              </div>
+              <span class="helper-text">Active functions (top is currently executing)</span>
+            </div>
+            <div class="panel-body stack-boxes-container" id="stack-boxes"></div>
+          </div>
+
+          <!-- Optional Advanced Tools Accordion -->
+          <details class="advanced-accordion" id="advanced-tools-accordion">
+            <summary class="advanced-summary">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+              <span>Advanced Analysis Tools (History Chart &amp; Step Comparison)</span>
+            </summary>
+            <div class="advanced-content">
+              <!-- Variable History -->
+              <div class="sub-panel">
+                <div class="sub-panel-header">
+                  <span class="sub-panel-title">Variable History Across Time</span>
+                  <select id="history-var-select" class="form-select form-select-sm"></select>
+                </div>
+                <div class="history-nav-row">
+                  <button id="btn-prev-change" class="btn btn-secondary btn-xs">◀ Previous change</button>
+                  <button id="btn-next-change" class="btn btn-secondary btn-xs">Next change ▶</button>
+                  <span class="history-summary" id="history-summary-text">—</span>
+                </div>
+                <div id="history-chart-wrapper" class="history-chart-wrapper">
+                  <svg id="history-chart-svg" class="history-svg" viewBox="0 0 540 130" preserveAspectRatio="none"></svg>
+                </div>
+                <div id="history-text-list" class="history-text-list hidden">
+                  <div class="history-text-items" id="history-text-items"></div>
+                </div>
+              </div>
+
+              <!-- Step Compare -->
+              <div class="sub-panel">
+                <div class="sub-panel-header">
+                  <span class="sub-panel-title">Compare Two Steps</span>
+                </div>
+                <div class="compare-row">
+                  <div class="compare-input-group">
+                    <label>Step A:</label>
+                    <input type="number" id="compare-step-a" value="1" min="1">
+                    <button id="btn-set-step-a" class="btn btn-ghost btn-xs">Current</button>
+                  </div>
+                  <span class="compare-vs">vs</span>
+                  <div class="compare-input-group">
+                    <label>Step B:</label>
+                    <input type="number" id="compare-step-b" value="2" min="1">
+                    <button id="btn-set-step-b" class="btn btn-ghost btn-xs">Current</button>
+                  </div>
+                  <button id="btn-run-compare" class="btn btn-secondary btn-sm">Compare</button>
+                </div>
+                <table class="data-table" id="compare-table">
+                  <thead>
+                    <tr>
+                      <th>Variable</th>
+                      <th>Step A</th>
+                      <th>Step B</th>
+                      <th>Difference</th>
+                    </tr>
+                  </thead>
+                  <tbody id="compare-tbody"></tbody>
+                </table>
+                <div id="compare-empty" class="empty-state">No variable differences between chosen steps.</div>
+              </div>
+            </div>
+          </details>
+        </section>
+      </div>
+    </section>
+
+    <!-- ====================================================================
+         TAB 3: BUG ANALYSIS (Dedicated Section)
+         ==================================================================== -->
+    <section id="tab-analysis" class="tab-pane" aria-labelledby="tab-btn-analysis">
+      <div class="analysis-view-container">
+
+        <!-- Top Overview Banner -->
+        <div class="analysis-overview-banner" id="analysis-overview-banner">
+          <div class="banner-icon-box" id="analysis-banner-icon">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+          </div>
+          <div class="banner-text">
+            <h2 id="analysis-banner-title">Bug &amp; Execution Analysis</h2>
+            <p id="analysis-banner-desc">Analyzing execution trace for runtime crashes, uninitialized memory, and anomalous patterns.</p>
+          </div>
+        </div>
+
+        <!-- Section 1: Actual Detected Crash (If crashed) -->
+        <div class="analysis-card crash-card" id="analysis-crash-card">
+          <div class="card-header">
+            <div class="header-tag tag-danger">Detected Runtime Error</div>
+            <span class="card-title" id="crash-card-title">Fatal Signal / Crash</span>
+          </div>
+          <div class="card-body">
+            <div class="crash-meta-grid">
+              <div class="meta-box">
+                <span class="meta-label">Signal / Exception</span>
+                <span class="meta-value text-danger" id="crash-meta-signal">SIGSEGV</span>
+              </div>
+              <div class="meta-box">
+                <span class="meta-label">Execution Step</span>
+                <span class="meta-value" id="crash-meta-step">Step 6 of 6</span>
+              </div>
+              <div class="meta-box">
+                <span class="meta-label">Source Location</span>
+                <span class="meta-value" id="crash-meta-location">getAge() at line 10</span>
+              </div>
+            </div>
+
+            <div class="explanation-box" id="crash-explanation-text">
+              <!-- Explanation filled dynamically -->
+            </div>
+
+            <div class="crash-variables-section">
+              <span class="section-subtitle">Local Variables at Moment of Crash:</span>
+              <table class="data-table" id="crash-vars-table">
+                <thead>
+                  <tr>
+                    <th>Variable</th>
+                    <th>Value</th>
+                    <th>Assessment</th>
+                  </tr>
+                </thead>
+                <tbody id="crash-vars-tbody"></tbody>
+              </table>
+            </div>
+
+            <div class="crash-action-row">
+              <button id="btn-jump-crash-step" class="btn btn-danger">
+                Jump to Crash Step in Debugger ➔
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 2: Suspicious Variable Changes & Heuristics -->
+        <div class="analysis-card heuristics-card">
+          <div class="card-header">
+            <div class="header-tag tag-warning">Heuristic Warnings &amp; Suspicious Patterns</div>
+            <span class="card-title">Code Smells &amp; Logic Anomalies</span>
+          </div>
+          <div class="card-body">
+            <p class="card-intro">
+              These are potential logic issues identified from the timeline trace (e.g. uninitialized memory reads, zero-multiplication base cases, or unbounded call depth).
+            </p>
+            <div class="findings-list" id="findings-list">
+              <!-- Dynamic findings inserted here -->
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
