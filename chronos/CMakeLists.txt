@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(Chronos CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Threads REQUIRED)
+add_executable(chronos src/main.cpp src/GdbBackend.cpp)
+target_include_directories(chronos PRIVATE third_party src)
+target_link_libraries(chronos PRIVATE Threads::Threads)
